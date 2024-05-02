@@ -27,12 +27,12 @@ import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.SortingProperty;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.type.RowType;
+import io.trino.sql.ir.Comparison;
+import io.trino.sql.ir.Constant;
+import io.trino.sql.ir.FieldReference;
+import io.trino.sql.ir.Reference;
 import io.trino.sql.planner.assertions.BasePlanTest;
 import io.trino.sql.planner.assertions.PlanMatchPattern;
-import io.trino.sql.tree.ComparisonExpression;
-import io.trino.sql.tree.LongLiteral;
-import io.trino.sql.tree.SubscriptExpression;
-import io.trino.sql.tree.SymbolReference;
 import io.trino.testing.PlanTester;
 import org.junit.jupiter.api.Test;
 
@@ -44,6 +44,8 @@ import static io.trino.spi.connector.SortOrder.ASC_NULLS_FIRST;
 import static io.trino.spi.connector.SortOrder.ASC_NULLS_LAST;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.VarcharType.VARCHAR;
+import static io.trino.sql.ir.Comparison.Operator.EQUAL;
+import static io.trino.sql.planner.SystemPartitioningHandle.FIXED_ARBITRARY_DISTRIBUTION;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.anyTree;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.exchange;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.expression;
@@ -62,7 +64,6 @@ import static io.trino.sql.planner.plan.ExchangeNode.Type.GATHER;
 import static io.trino.sql.planner.plan.ExchangeNode.Type.REPARTITION;
 import static io.trino.sql.planner.plan.TopNNode.Step.FINAL;
 import static io.trino.sql.planner.plan.TopNNode.Step.PARTIAL;
-import static io.trino.sql.tree.ComparisonExpression.Operator.EQUAL;
 import static io.trino.sql.tree.SortItem.NullOrdering.FIRST;
 import static io.trino.sql.tree.SortItem.NullOrdering.LAST;
 import static io.trino.sql.tree.SortItem.Ordering.ASCENDING;
@@ -147,11 +148,15 @@ public class TestPartialTopNWithPresortedInput
 
         orderBy = ImmutableList.of(sort("t_col_a", ASCENDING, LAST));
         assertDistributedPlan("SELECT col_a FROM table_a ORDER BY 1 ASC NULLS LAST LIMIT 10", output(
-                        topN(10, orderBy, FINAL,
-                                exchange(LOCAL, GATHER, ImmutableList.of(),
-                                        exchange(REMOTE, GATHER, ImmutableList.of(),
-                                                topN(10, orderBy, PARTIAL,
-                                                        tableScan("table_a", ImmutableMap.of("t_col_a", "col_a"))))))));
+                topN(10, orderBy, FINAL,
+                        exchange(LOCAL, GATHER, ImmutableList.of(),
+                                exchange(REMOTE, GATHER, ImmutableList.of(),
+                                        topN(10, orderBy, PARTIAL,
+                                                exchange(LOCAL, GATHER,
+                                                        topN(10, orderBy, PARTIAL,
+                                                                exchange(LOCAL, REPARTITION, FIXED_ARBITRARY_DISTRIBUTION,
+                                                                        topN(10, orderBy, PARTIAL,
+                                                                                tableScan("table_a", ImmutableMap.of("t_col_a", "col_a"))))))))))));
     }
 
     @Test
@@ -189,8 +194,8 @@ public class TestPartialTopNWithPresortedInput
                                                         values(
                                                                 ImmutableList.of("id"),
                                                                 ImmutableList.of(
-                                                                        ImmutableList.of(new LongLiteral("1")),
-                                                                        ImmutableList.of(new LongLiteral("1"))))))))));
+                                                                        ImmutableList.of(new Constant(INTEGER, 1L)),
+                                                                        ImmutableList.of(new Constant(INTEGER, 1L))))))))));
     }
 
     @Test
@@ -208,9 +213,9 @@ public class TestPartialTopNWithPresortedInput
                         topN(1, ImmutableList.of(sort("k", ASCENDING, LAST)), FINAL,
                                 anyTree(
                                         limit(1, ImmutableList.of(), true, ImmutableList.of("k"),
-                                                project(ImmutableMap.of("k", expression(new SubscriptExpression(new SymbolReference("nested"), new LongLiteral("1")))),
+                                                project(ImmutableMap.of("k", expression(new FieldReference(new Reference(RowType.from(ImmutableList.of(RowType.field("k", INTEGER))), "nested"), 0))),
                                                         filter(
-                                                                new ComparisonExpression(EQUAL, new SubscriptExpression(new SymbolReference("nested"), new LongLiteral("1")), new LongLiteral("1")),
+                                                                new Comparison(EQUAL, new FieldReference(new Reference(RowType.from(ImmutableList.of(RowType.field("k", INTEGER))), "nested"), 0), new Constant(INTEGER, 1L)),
                                                                 tableScan("with_nested_field", ImmutableMap.of("nested", "nested")))))))));
     }
 }

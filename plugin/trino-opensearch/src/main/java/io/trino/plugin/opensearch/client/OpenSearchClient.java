@@ -173,7 +173,7 @@ public class OpenSearchClient
             Set<OpenSearchNode> nodes = fetchNodes();
 
             HttpHost[] hosts = nodes.stream()
-                    .map(OpenSearchNode::getAddress)
+                    .map(OpenSearchNode::address)
                     .filter(Optional::isPresent)
                     .map(Optional::get)
                     .map(address -> HttpHost.create(format("%s://%s", tlsEnabled ? "https" : "http", address)))
@@ -237,6 +237,7 @@ public class OpenSearchClient
 
             awsSecurityConfig.ifPresent(securityConfig -> clientBuilder.addInterceptorLast(new AwsRequestSigner(
                     securityConfig.getRegion(),
+                    securityConfig.getDeploymentType(),
                     getAwsCredentialsProvider(securityConfig))));
 
             return clientBuilder;
@@ -314,7 +315,7 @@ public class OpenSearchClient
     public List<Shard> getSearchShards(String index)
     {
         Map<String, OpenSearchNode> nodeById = getNodes().stream()
-                .collect(toImmutableMap(OpenSearchNode::getId, Function.identity()));
+                .collect(toImmutableMap(OpenSearchNode::id, Function.identity()));
 
         SearchShardsResponse shardsResponse = doRequest(format("/%s/_search_shards", index), SEARCH_SHARDS_RESPONSE_CODEC::fromJson);
 
@@ -340,7 +341,7 @@ public class OpenSearchClient
                 node = nodeById.get(chosen.getNode());
             }
 
-            shards.add(new Shard(chosen.getIndex(), chosen.getShard(), node.getAddress()));
+            shards.add(new Shard(chosen.getIndex(), chosen.getShard(), node.address()));
         }
 
         return shards.build();
@@ -389,9 +390,20 @@ public class OpenSearchClient
                     int docsCount = root.get(i).get("docs.count").asInt();
                     int deletedDocsCount = root.get(i).get("docs.deleted").asInt();
                     if (docsCount == 0 && deletedDocsCount == 0) {
-                        // without documents, the index won't have any dynamic mappings, but maybe there are some explicit ones
-                        if (getIndexMetadata(index).getSchema().getFields().isEmpty()) {
-                            continue;
+                        try {
+                            // without documents, the index won't have any dynamic mappings, but maybe there are some explicit ones
+                            if (getIndexMetadata(index).getSchema().getFields().isEmpty()) {
+                                continue;
+                            }
+                        }
+                        catch (TrinoException e) {
+                            if (e.getErrorCode().equals(OPENSEARCH_INVALID_METADATA.toErrorCode())) {
+                                continue;
+                            }
+                            if (e.getCause() instanceof ResponseException cause && cause.getResponse().getStatusLine().getStatusCode() == 404) {
+                                continue;
+                            }
+                            throw e;
                         }
                     }
                     result.add(index);

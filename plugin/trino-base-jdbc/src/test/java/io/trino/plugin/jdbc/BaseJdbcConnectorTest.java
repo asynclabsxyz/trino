@@ -45,7 +45,6 @@ import io.trino.testing.sql.TestView;
 import org.intellij.lang.annotations.Language;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.Timeout;
 
 import java.util.ArrayList;
@@ -77,6 +76,7 @@ import static io.trino.sql.planner.OptimizerConfig.JoinDistributionType.BROADCAS
 import static io.trino.sql.planner.OptimizerConfig.JoinDistributionType.PARTITIONED;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.anyTree;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.node;
+import static io.trino.sql.planner.assertions.PlanMatchPattern.project;
 import static io.trino.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
 import static io.trino.testing.QueryAssertions.assertEqualsIgnoreOrder;
 import static io.trino.testing.TestingConnectorBehavior.SUPPORTS_AGGREGATION_PUSHDOWN;
@@ -120,9 +120,7 @@ import static java.util.concurrent.TimeUnit.MINUTES;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.abort;
-import static org.junit.jupiter.api.TestInstance.Lifecycle.PER_CLASS;
 
-@TestInstance(PER_CLASS)
 public abstract class BaseJdbcConnectorTest
         extends BaseConnectorTest
 {
@@ -254,7 +252,7 @@ public abstract class BaseJdbcConnectorTest
                 getSession(),
                 "SELECT custkey, sum(totalprice) FROM (SELECT custkey, totalprice FROM orders ORDER BY orderdate ASC, totalprice ASC LIMIT 10) GROUP BY custkey",
                 hasBehavior(SUPPORTS_TOPN_PUSHDOWN),
-                node(TopNNode.class, anyTree(node(TableScanNode.class))));
+                project(node(TopNNode.class, anyTree(node(TableScanNode.class)))));
         // GROUP BY with JOIN
         assertConditionallyPushedDown(
                 joinPushdownEnabled(getSession()),
@@ -911,7 +909,7 @@ public abstract class BaseJdbcConnectorTest
         }
 
         // with TopN over numeric column
-        PlanMatchPattern topnOverTableScan = node(TopNNode.class, anyTree(node(TableScanNode.class)));
+        PlanMatchPattern topnOverTableScan = project(node(TopNNode.class, anyTree(node(TableScanNode.class))));
         assertConditionallyPushedDown(
                 getSession(),
                 "SELECT * FROM (SELECT regionkey FROM nation ORDER BY nationkey ASC LIMIT 10) LIMIT 5",
@@ -1102,7 +1100,7 @@ public abstract class BaseJdbcConnectorTest
 
         // topN over varchar/char columns should only be pushed down if the remote systems's sort order matches Trino
         boolean expectTopNPushdown = hasBehavior(SUPPORTS_TOPN_PUSHDOWN_WITH_VARCHAR);
-        PlanMatchPattern topNOverTableScan = node(TopNNode.class, anyTree(node(TableScanNode.class)));
+        PlanMatchPattern topNOverTableScan = project(node(TopNNode.class, anyTree(node(TableScanNode.class))));
 
         try (TestTable testTable = new TestTable(
                 getQueryRunner()::execute,
@@ -1466,24 +1464,34 @@ public abstract class BaseJdbcConnectorTest
         }
 
         try (TestView sleepingView = createSleepingView(new Duration(1, MINUTES))) {
+            String tableNameToScan = sleepingView.getName().toLowerCase(ENGLISH);
+
+            RemoteLogTracingEvent runningTracingEvent = new RemoteLogTracingEvent(event -> event.getQuery().toLowerCase(ENGLISH).contains(tableNameToScan) && event.getStatus() == RUNNING);
+            startTracingDatabaseEvent(runningTracingEvent);
+
             String query = "SELECT * FROM " + sleepingView.getName();
             Future<?> future = executor.submit(() -> assertQueryFails(query, "Query killed. Message: Killed by test"));
             QueryId queryId = getQueryId(query);
+            assertEventually(() -> assertThat(runningTracingEvent.hasHappened()).isTrue());
+            stopTracingDatabaseEvent(runningTracingEvent);
 
-            assertEventually(() -> assertRemoteQueryStatus(sleepingView.getName(), RUNNING));
+            RemoteLogTracingEvent cancelledTracingEvent = new RemoteLogTracingEvent(event -> event.getQuery().toLowerCase(ENGLISH).contains(tableNameToScan) && event.getStatus() == CANCELLED);
+            startTracingDatabaseEvent(cancelledTracingEvent);
             assertUpdate(format("CALL system.runtime.kill_query(query_id => '%s', message => '%s')", queryId, "Killed by test"));
             future.get();
-            assertEventually(() -> assertRemoteQueryStatus(sleepingView.getName(), CANCELLED));
+            assertEventually(() -> assertThat(cancelledTracingEvent.hasHappened()).isTrue());
+            stopTracingDatabaseEvent(cancelledTracingEvent);
         }
     }
 
-    private void assertRemoteQueryStatus(String tableNameToScan, RemoteDatabaseEvent.Status status)
+    protected void startTracingDatabaseEvent(RemoteLogTracingEvent event)
     {
-        String lowerCasedTableName = tableNameToScan.toLowerCase(ENGLISH);
-        assertThat(getRemoteDatabaseEvents())
-                .filteredOn(event -> event.getQuery().toLowerCase(ENGLISH).contains(lowerCasedTableName))
-                .map(RemoteDatabaseEvent::getStatus)
-                .contains(status);
+        throw new UnsupportedOperationException();
+    }
+
+    protected void stopTracingDatabaseEvent(RemoteLogTracingEvent event)
+    {
+        throw new UnsupportedOperationException();
     }
 
     private QueryId getQueryId(String query)
@@ -1502,11 +1510,6 @@ public abstract class BaseJdbcConnectorTest
             return new QueryId((String) queriesResult.getOnlyValue());
         }
         throw new IllegalStateException("Query id not found for: " + query);
-    }
-
-    protected List<RemoteDatabaseEvent> getRemoteDatabaseEvents()
-    {
-        throw new UnsupportedOperationException();
     }
 
     protected TestView createSleepingView(Duration minimalSleepDuration)
@@ -1588,7 +1591,7 @@ public abstract class BaseJdbcConnectorTest
 
         skipTestUnless(hasBehavior(SUPPORTS_CREATE_TABLE) && hasBehavior(SUPPORTS_UPDATE));
         try (TestTable table = new TestTable(getQueryRunner()::execute, "test_update_all", "(a INT, b INT, c INT)", ImmutableList.of("1, 2, 3"))) {
-            assertQueryFails("UPDATE " + table.getName() + " SET a = 1, b = 1, c = 2", MODIFYING_ROWS_MESSAGE);
+            assertUpdate("UPDATE " + table.getName() + " SET a = 1, b = 1, c = 2", 1);
         }
     }
 
