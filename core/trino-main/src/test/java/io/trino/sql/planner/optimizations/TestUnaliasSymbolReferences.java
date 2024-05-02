@@ -25,6 +25,8 @@ import io.trino.metadata.TableHandle;
 import io.trino.plugin.tpch.TpchColumnHandle;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.type.BigintType;
+import io.trino.sql.ir.Expression;
+import io.trino.sql.ir.Reference;
 import io.trino.sql.planner.Plan;
 import io.trino.sql.planner.PlanNodeIdAllocator;
 import io.trino.sql.planner.Symbol;
@@ -36,8 +38,6 @@ import io.trino.sql.planner.iterative.rule.test.PlanBuilder;
 import io.trino.sql.planner.plan.Assignments;
 import io.trino.sql.planner.plan.DynamicFilterId;
 import io.trino.sql.planner.plan.PlanNode;
-import io.trino.sql.tree.Expression;
-import io.trino.sql.tree.SymbolReference;
 import io.trino.testing.PlanTester;
 import org.junit.jupiter.api.Test;
 
@@ -47,6 +47,7 @@ import static io.trino.execution.querystats.PlanOptimizersStatsCollector.createP
 import static io.trino.plugin.tpch.TpchMetadata.TINY_SCHEMA_NAME;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.sql.DynamicFilters.createDynamicFilterExpression;
+import static io.trino.sql.ir.Booleans.TRUE;
 import static io.trino.sql.ir.IrUtils.and;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.filter;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.groupId;
@@ -55,7 +56,6 @@ import static io.trino.sql.planner.assertions.PlanMatchPattern.project;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.tableScan;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.values;
 import static io.trino.sql.planner.plan.JoinType.INNER;
-import static io.trino.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static io.trino.testing.TestingHandles.TEST_CATALOG_NAME;
 
 public class TestUnaliasSymbolReferences
@@ -67,7 +67,7 @@ public class TestUnaliasSymbolReferences
         String probeTable = "supplier";
         String buildTable = "nation";
         assertOptimizedPlan(
-                new UnaliasSymbolReferences(getPlanTester().getPlannerContext().getMetadata()),
+                new UnaliasSymbolReferences(),
                 (p, session, metadata) -> {
                     ColumnHandle column = new TpchColumnHandle("nationkey", BIGINT);
                     Symbol buildColumnSymbol = p.symbol("nationkey");
@@ -81,7 +81,7 @@ public class TestUnaliasSymbolReferences
                     return p.join(
                             INNER,
                             p.filter(
-                                    TRUE_LITERAL, // additional filter to test recursive call
+                                    TRUE, // additional filter to test recursive call
                                     p.filter(
                                             and(
                                                     dynamicFilterExpression(metadata, probeColumn1, dynamicFilterId1),
@@ -105,13 +105,13 @@ public class TestUnaliasSymbolReferences
                 },
                 join(INNER, builder -> builder
                         .dynamicFilter(ImmutableMap.of(
-                                new SymbolReference("probeColumn1"), "column",
-                                new SymbolReference("probeColumn2"), "column"))
+                                new Reference(BIGINT, "probeColumn1"), "column",
+                                new Reference(BIGINT, "probeColumn2"), "column"))
                         .left(
                                 filter(
-                                        TRUE_LITERAL,
+                                        TRUE,
                                         filter(
-                                                TRUE_LITERAL,
+                                                TRUE,
                                                 tableScan(
                                                         probeTable,
                                                         ImmutableMap.of("probeColumn1", "suppkey", "probeColumn2", "nationkey")))))
@@ -123,7 +123,7 @@ public class TestUnaliasSymbolReferences
     public void testGroupIdGroupingSetsDeduplicated()
     {
         assertOptimizedPlan(
-                new UnaliasSymbolReferences(getPlanTester().getPlannerContext().getMetadata()),
+                new UnaliasSymbolReferences(),
                 (p, session, metadata) -> {
                     Symbol symbol = p.symbol("symbol");
                     Symbol alias1 = p.symbol("alias1");
@@ -157,7 +157,6 @@ public class TestUnaliasSymbolReferences
                     plan,
                     new PlanOptimizer.Context(
                             session,
-                            planBuilder.getTypes(),
                             symbolAllocator,
                             idAllocator,
                             WarningCollector.NOOP,
@@ -165,7 +164,7 @@ public class TestUnaliasSymbolReferences
                             new CachingTableStatsProvider(metadata, session),
                             RuntimeInfoProvider.noImplementation()));
 
-            Plan actual = new Plan(optimized, planBuilder.getTypes(), StatsAndCosts.empty());
+            Plan actual = new Plan(optimized, StatsAndCosts.empty());
             PlanAssert.assertPlan(session, planTester.getPlannerContext().getMetadata(), planTester.getPlannerContext().getFunctionManager(), planTester.getStatsCalculator(), actual, pattern);
             return null;
         });

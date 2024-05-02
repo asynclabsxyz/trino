@@ -85,6 +85,7 @@ import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.concurrent.MoreFutures.addExceptionCallback;
 import static io.airlift.concurrent.MoreFutures.toListenableFuture;
+import static io.trino.hive.formats.HiveClassNames.SYMLINK_TEXT_INPUT_FORMAT_CLASS;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_EXCEEDED_PARTITION_LIMIT;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_FILESYSTEM_ERROR;
@@ -109,7 +110,6 @@ import static io.trino.plugin.hive.util.AcidTables.isFullAcidTable;
 import static io.trino.plugin.hive.util.AcidTables.isTransactionalTable;
 import static io.trino.plugin.hive.util.AcidTables.readAcidVersionFile;
 import static io.trino.plugin.hive.util.HiveBucketing.getBucketingVersion;
-import static io.trino.plugin.hive.util.HiveClassNames.SYMLINK_TEXT_INPUT_FORMAT_CLASS;
 import static io.trino.plugin.hive.util.HiveUtil.checkCondition;
 import static io.trino.plugin.hive.util.HiveUtil.getDeserializerClassName;
 import static io.trino.plugin.hive.util.HiveUtil.getFooterCount;
@@ -447,7 +447,7 @@ public class BackgroundHiveSplitLoader
                 int tableBucketCount = tableBucketInfo.get().getTableBucketCount();
                 // Partition bucketing_version cannot be different from table
                 BucketingVersion bucketingVersion = getBucketingVersion(table.getParameters());
-                int partitionBucketCount = partitionBucketProperty.get().getBucketCount();
+                int partitionBucketCount = partitionBucketProperty.get().bucketCount();
                 // Validation was done in HiveSplitManager#getPartitionMetadata.
                 // Here, it's just trying to see if its needs the BucketConversion.
                 if (tableBucketCount != partitionBucketCount) {
@@ -906,11 +906,11 @@ public class BackgroundHiveSplitLoader
                 return Optional.empty();
             }
 
-            BucketingVersion bucketingVersion = bucketHandle.get().getBucketingVersion();
-            int tableBucketCount = bucketHandle.get().getTableBucketCount();
-            int readBucketCount = bucketHandle.get().getReadBucketCount();
+            BucketingVersion bucketingVersion = bucketHandle.get().bucketingVersion();
+            int tableBucketCount = bucketHandle.get().tableBucketCount();
+            int readBucketCount = bucketHandle.get().readBucketCount();
 
-            List<HiveColumnHandle> bucketColumns = bucketHandle.get().getColumns();
+            List<HiveColumnHandle> bucketColumns = bucketHandle.get().columns();
             IntPredicate predicate = bucketFilter
                     .<IntPredicate>map(filter -> filter.getBucketsToKeep()::contains)
                     .orElse(bucket -> true);
